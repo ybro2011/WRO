@@ -105,7 +105,8 @@ export const executeToolViaOpenAPI = async (req: Request, res: Response): Promis
     // Create a mock request structure that matches what handleCallToolRequest expects
     const mockRequest = {
       params: {
-        name: toolName, // Just use the tool name without server prefix as it gets added by handleCallToolRequest
+        // Prefix with server name so getServerByTool can resolve correctly
+        name: `${serverName}-${toolName}`,
         arguments: args,
       },
     };

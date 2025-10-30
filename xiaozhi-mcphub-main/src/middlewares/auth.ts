@@ -35,6 +35,12 @@ const checkReadonly = (req: Request): boolean => {
 
 // Middleware to authenticate JWT token
 export const auth = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  // Bypass auth entirely for local development hosting
+  if (process.env.LOCAL_DEV === 'true') {
+    next();
+    return;
+  }
+
   const t = (req as any).t;
   if (!checkReadonly(req)) {
     res.status(403).json({ success: false, message: t('api.errors.readonly') });
