@@ -2,6 +2,70 @@
 
 This log tracks major changes, fixes, and improvements made to the WRO project.
 
+## 2025-10-31 - Audiobook MCP Server Fixes
+
+### Changes Made:
+
+#### 1. Fixed Fetch Initialization
+- **What**: Improved fetch API initialization to work with Node.js 18+ built-in fetch and node-fetch fallback
+- **Why**: Server was failing because fetch was not properly initialized before use
+- **Solution**: 
+  - Use `globalThis.fetch` when available (Node.js 18+)
+  - Dynamically import `node-fetch` as fallback if global fetch not available
+  - Initialize fetch in `_initFetchIfNeeded()` method before server starts
+  - All API calls now use `this.fetch` instead of global `fetch`
+- **Files Modified**: `xiaozhi-mcphub-main/audiobook-mcp-server.js`
+
+#### 2. Enhanced Error Handling and API Response Parsing
+- **What**: Added robust error handling and response validation for all audiobook API integrations
+- **Why**: API responses may have varying structures, causing crashes when accessing nested properties
+- **Solution**:
+  - Added response status checks (`response.ok`) before parsing JSON
+  - Added validation for response structure (checking for `data.response.docs`, `data.books`, etc.)
+  - Added fallback values for missing properties (arrays vs strings, etc.)
+  - Improved error messages for debugging
+- **APIs Fixed**:
+  - LibriVox API (`searchLibriVox`)
+  - Internet Archive API (`searchInternetArchive`)
+  - Open Library API (`searchOpenLibrary`)
+
+#### 3. Improved Duration Parsing
+- **What**: Enhanced `parseDuration()` function to handle more time formats
+- **Why**: Different APIs return duration in different formats (HH:MM:SS, HH:MM, Xh Ym Zs, etc.)
+- **Solution**:
+  - Added support for "HH:MM" format (hours:minutes without seconds)
+  - Improved regex matching for "Xh Ym Zs" format
+  - Added fallback to parse numeric strings as seconds
+  - Better handling of edge cases and invalid inputs
+- **Files Modified**: `xiaozhi-mcphub-main/audiobook-mcp-server.js` (lines 424-453)
+
+#### 4. Enhanced Data Structure Handling
+- **What**: Better handling of array vs string properties in API responses
+- **Why**: Some APIs return arrays, others return strings or single values for the same field
+- **Solution**:
+  - Check if properties are arrays before calling array methods
+  - Use `Array.isArray()` checks throughout
+  - Provide sensible defaults for missing or malformed data
+  - Handle both single values and arrays (e.g., `book.creator` can be string or array)
+
+### Technical Impact:
+- Server now starts successfully without errors
+- Better resilience to API response format variations
+- More accurate audiobook metadata parsing
+- Improved error messages for debugging
+
+### Lessons Learned:
+- Always validate API response structure before accessing nested properties
+- Use defensive programming when dealing with external APIs
+- Test with real API responses to catch edge cases
+- Consider both built-in and polyfill implementations for web APIs
+
+### Files Affected:
+- `xiaozhi-mcphub-main/audiobook-mcp-server.js` - Main server file with all fixes
+- `xiaozhi-mcphub-main/HOW-HARDWARE-CONNECTS-TO-MCP.md` - Minor documentation updates
+
+---
+
 ## 2024-12-19 - UK Trains MCP Server Setup & ES Module Fixes
 
 ### Changes Made:
