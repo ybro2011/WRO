@@ -6,11 +6,12 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import fetch from 'node-fetch';
 
 // Audiobook MCP Server
 class AudiobookMCPServer {
   constructor() {
+    // Initialize fetch - use global fetch (Node 18+), will initialize node-fetch in run() if needed
+    this.fetch = typeof globalThis.fetch !== 'undefined' ? globalThis.fetch : null;
     this.server = new Server(
       {
         name: 'audiobook-mcp',
@@ -35,6 +36,20 @@ class AudiobookMCPServer {
 
     this.setupToolHandlers();
     this.setupErrorHandling();
+  }
+
+  async _initFetchIfNeeded() {
+    if (!this.fetch) {
+      try {
+        const fetchModule = await import('node-fetch');
+        this.fetch = fetchModule.default;
+      } catch (error) {
+        console.error('Warning: Could not import node-fetch. Make sure Node.js 18+ is used or node-fetch is installed.');
+      }
+    }
+    if (!this.fetch) {
+      throw new Error('No fetch implementation available. Please use Node.js 18+ or install node-fetch.');
+    }
   }
 
   setupErrorHandling() {
@@ -279,24 +294,36 @@ class AudiobookMCPServer {
         return this.audiobookCache.get(cacheKey);
       }
 
-      const response = await fetch(`https://librivox.org/api/feed/audiobooks/?search=${encodeURIComponent(query)}&format=json&limit=${limit}`);
+      const response = await this.fetch(`https://librivox.org/api/feed/audiobooks/?search=${encodeURIComponent(query)}&format=json&limit=${limit}`);
+      
+      if (!response.ok) {
+        console.error(`LibriVox API error: ${response.status} ${response.statusText}`);
+        return [];
+      }
+      
       const data = await response.json();
       
+      // Check if response structure is valid
+      if (!data || !data.books || !Array.isArray(data.books)) {
+        console.error('LibriVox API returned invalid structure');
+        return [];
+      }
+      
       const books = data.books.map(book => ({
-        id: book.id,
-        title: book.title,
-        author: book.authors?.map(author => `${author.first_name} ${author.last_name}`).join(', ') || 'Unknown Author',
-        narrator: book.readers?.map(reader => reader.display_name).join(', ') || 'Unknown Narrator',
-        genre: book.genres?.map(genre => genre.name).join(', ') || 'Unknown Genre',
-        duration: this.parseDuration(book.totaltime),
-        chapters: book.sections?.length || 1,
-        year: book.copyright_year || 'Unknown',
-        description: book.description || 'No description available',
+        id: book.id || `librivox_${Date.now()}_${Math.random()}`,
+        title: book.title || 'Untitled',
+        author: Array.isArray(book.authors) ? book.authors.map(author => `${author.first_name || ''} ${author.last_name || ''}`).join(', ').trim() : (book.authors || 'Unknown Author'),
+        narrator: Array.isArray(book.readers) ? book.readers.map(reader => reader.display_name || reader.name || '').join(', ').trim() : (book.readers || 'Unknown Narrator'),
+        genre: Array.isArray(book.genres) ? book.genres.map(genre => genre.name || genre).join(', ') : (book.genres || 'Unknown Genre'),
+        duration: this.parseDuration(book.totaltime || book.total_time || book.duration),
+        chapters: Array.isArray(book.sections) ? book.sections.length : (book.sections_count || 1),
+        year: book.copyright_year || book.year || 'Unknown',
+        description: (book.description && typeof book.description === 'string') ? book.description.substring(0, 500) : 'No description available',
         language: book.language || 'English',
-        url: book.url_librivox,
+        url: book.url_librivox || book.url || '',
         source: 'LibriVox',
-        cover: book.url_cover_image,
-        sections: book.sections || []
+        cover: book.url_cover_image || book.cover_image || null,
+        sections: Array.isArray(book.sections) ? book.sections : []
       }));
 
       this.audiobookCache.set(cacheKey, books);
@@ -314,24 +341,36 @@ class AudiobookMCPServer {
         return this.audiobookCache.get(cacheKey);
       }
 
-      const response = await fetch(`https://archive.org/advancedsearch.php?q=mediatype:audio+AND+collection:librivoxaudio+AND+${encodeURIComponent(query)}&output=json&rows=${limit}`);
+      const response = await this.fetch(`https://archive.org/advancedsearch.php?q=mediatype:audio+AND+collection:librivoxaudio+AND+${encodeURIComponent(query)}&output=json&rows=${limit}`);
+      
+      if (!response.ok) {
+        console.error(`Internet Archive API error: ${response.status} ${response.statusText}`);
+        return [];
+      }
+      
       const data = await response.json();
       
+      // Check if response structure is valid
+      if (!data || !data.response || !data.response.docs || !Array.isArray(data.response.docs)) {
+        console.error('Internet Archive API returned invalid structure');
+        return [];
+      }
+      
       const books = data.response.docs.map(book => ({
-        id: book.identifier,
-        title: book.title,
-        author: book.creator || 'Unknown Author',
-        narrator: book.contributor || 'Unknown Narrator',
+        id: book.identifier || `archive_${Date.now()}_${Math.random()}`,
+        title: book.title || 'Untitled',
+        author: Array.isArray(book.creator) ? book.creator.join(', ') : (book.creator || 'Unknown Author'),
+        narrator: Array.isArray(book.contributor) ? book.contributor.join(', ') : (book.contributor || 'Unknown Narrator'),
         genre: 'Public Domain',
-        duration: this.parseDuration(book.runtime),
-        chapters: book.files?.filter(file => file.endsWith('.mp3')).length || 1,
-        year: book.date || 'Unknown',
-        description: book.description || 'No description available',
-        language: book.language || 'English',
-        url: `https://archive.org/download/${book.identifier}`,
+        duration: this.parseDuration(book.runtime || book.length || book.duration),
+        chapters: Array.isArray(book.files) ? book.files.filter(file => file.endsWith('.mp3')).length : 1,
+        year: Array.isArray(book.date) ? book.date[0] : (book.date || 'Unknown'),
+        description: (book.description && typeof book.description === 'string') ? book.description.substring(0, 500) : 'No description available',
+        language: Array.isArray(book.language) ? book.language[0] : (book.language || 'English'),
+        url: book.identifier ? `https://archive.org/details/${book.identifier}` : '',
         source: 'Internet Archive',
         cover: book.coverimage || null,
-        sections: book.files?.filter(file => file.endsWith('.mp3')) || []
+        sections: Array.isArray(book.files) ? book.files.filter(file => file.endsWith('.mp3')) : []
       }));
 
       this.audiobookCache.set(cacheKey, books);
@@ -349,21 +388,33 @@ class AudiobookMCPServer {
         return this.audiobookCache.get(cacheKey);
       }
 
-      const response = await fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&mediaType=audiobook&limit=${limit}`);
+      const response = await this.fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(query)}&mediaType=audiobook&limit=${limit}`);
+      
+      if (!response.ok) {
+        console.error(`Open Library API error: ${response.status} ${response.statusText}`);
+        return [];
+      }
+      
       const data = await response.json();
       
+      // Check if response structure is valid
+      if (!data || !data.docs || !Array.isArray(data.docs)) {
+        console.error('Open Library API returned invalid structure');
+        return [];
+      }
+      
       const books = data.docs.map(book => ({
-        id: book.key,
-        title: book.title,
-        author: book.author_name?.join(', ') || 'Unknown Author',
+        id: book.key || `openlib_${Date.now()}_${Math.random()}`,
+        title: book.title || 'Untitled',
+        author: Array.isArray(book.author_name) ? book.author_name.join(', ') : (book.author_name || 'Unknown Author'),
         narrator: 'Unknown Narrator',
-        genre: book.subject?.join(', ') || 'Unknown Genre',
+        genre: Array.isArray(book.subject) ? book.subject.slice(0, 3).join(', ') : (book.subject || 'Unknown Genre'),
         duration: 0, // Not available in Open Library
         chapters: 1,
-        year: book.first_publish_year || 'Unknown',
-        description: book.first_sentence?.[0] || 'No description available',
-        language: book.language?.[0] || 'English',
-        url: `https://openlibrary.org${book.key}`,
+        year: book.first_publish_year || book.publish_year?.[0] || 'Unknown',
+        description: Array.isArray(book.first_sentence) ? book.first_sentence[0] : (book.first_sentence || 'No description available'),
+        language: Array.isArray(book.language) ? book.language[0] : (book.language || 'English'),
+        url: book.key ? `https://openlibrary.org${book.key}` : '',
         source: 'Open Library',
         cover: book.cover_i ? `https://covers.openlibrary.org/b/id/${book.cover_i}-L.jpg` : null,
         sections: []
@@ -380,7 +431,7 @@ class AudiobookMCPServer {
   parseDuration(timeString) {
     if (!timeString) return 0;
     
-    // Handle formats like "11:30:45" or "11h 30m 45s"
+    // Handle formats like "11:30:45" or "11:30"
     const timeRegex = /(\d+):(\d+):(\d+)/;
     const match = timeString.match(timeRegex);
     
@@ -391,16 +442,32 @@ class AudiobookMCPServer {
       return hours * 3600 + minutes * 60 + seconds;
     }
     
-    // Handle formats like "11h 30m 45s"
+    // Handle formats like "11:30" (hours:minutes)
+    const shortTimeRegex = /(\d+):(\d+)/;
+    const shortMatch = timeString.match(shortTimeRegex);
+    if (shortMatch) {
+      const hours = parseInt(shortMatch[1]);
+      const minutes = parseInt(shortMatch[2]);
+      return hours * 3600 + minutes * 60;
+    }
+    
+    // Handle formats like "11h 30m 45s" or "11h30m45s"
     const parts = timeString.match(/(\d+)h|(\d+)m|(\d+)s/g);
     if (parts) {
       let totalSeconds = 0;
       parts.forEach(part => {
-        if (part.includes('h')) totalSeconds += parseInt(part) * 3600;
-        else if (part.includes('m')) totalSeconds += parseInt(part) * 60;
-        else if (part.includes('s')) totalSeconds += parseInt(part);
+        const num = parseInt(part);
+        if (part.includes('h')) totalSeconds += num * 3600;
+        else if (part.includes('m')) totalSeconds += num * 60;
+        else if (part.includes('s')) totalSeconds += num;
       });
       return totalSeconds;
+    }
+    
+    // Try to parse as number (assuming seconds)
+    const numSeconds = parseInt(timeString);
+    if (!isNaN(numSeconds)) {
+      return numSeconds;
     }
     
     return 0;
@@ -1046,6 +1113,9 @@ class AudiobookMCPServer {
 
   async run() {
     try {
+      // Ensure fetch is initialized before starting server
+      await this._initFetchIfNeeded();
+      
       const transport = new StdioServerTransport();
       await this.server.connect(transport);
       console.error('Audiobook MCP server running on stdio');
